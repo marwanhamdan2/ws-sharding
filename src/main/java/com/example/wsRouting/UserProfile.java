@@ -1,5 +1,5 @@
 
-package com.example.wsRouting;
+package com.example.wsSharding;
 
 import io.vertx.core.json.JsonObject;
 

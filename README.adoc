@@ -1,4 +1,4 @@
-= Wsrouting
+= wsSharding
 
 image:https://img.shields.io/badge/vert.x-5.0.6-purple.svg[link="https://vertx.io"]
 

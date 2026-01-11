@@ -1,4 +1,4 @@
-package com.example.wsRouting;
+package com.example.wsSharding;
 
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.json.JsonArray;

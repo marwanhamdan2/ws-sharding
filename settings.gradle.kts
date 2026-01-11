@@ -1,1 +1,1 @@
-rootProject.name = "wsRouting"
+rootProject.name = "wsSharding"

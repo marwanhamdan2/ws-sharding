@@ -17,7 +17,7 @@ repositories {
 val vertxVersion = "5.0.6"
 val junitJupiterVersion = "5.9.1"
 
-val mainVerticleName = "com.example.wsRouting.MainVerticle"
+val mainVerticleName = "com.example.wsSharding.MainVerticle"
 val launcherClassName = "io.vertx.launcher.application.VertxApplication"
 
 application {
