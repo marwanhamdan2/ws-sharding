@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: pods-{{POD_ID}}-service-entry
+  namespace: {{NAMESPACE}}
+spec:
+  hosts:
+    - {{POD_ID}}.pod.cluster
+  location: MESH_INTERNAL
+  resolution: STATIC
+  endpoints:
+    - address: {{POD_IP}}
+  ports:
+    - name: http-ws
+      number: 8080
+      protocol: HTTP

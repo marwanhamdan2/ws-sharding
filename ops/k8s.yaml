@@ -2,20 +2,20 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ws-app-ns
+  name: ws-ns
   annotations:
     istio-injection: enabled
   labels:
     istio-injection: enabled
 ---
-# Headless Service ==> For Peer Discovery
+# Headless Service ==> For Peer Discovery (used by main-api to discover ws-app pods)
 # this creates DNS records for individual pods (e.g., pod-name.ws-app-headless.ws-app.svc.cluster.local
-# and we can use SRV record to list all the pods using DNS istead of calling k8s api server
+# and we can use SRV record to list all the pods using DNS instead of calling k8s api server
 apiVersion: v1
 kind: Service
 metadata:
   name: ws-app-srv-headless
-  namespace: ws-app-ns
+  namespace: ws-ns
 spec:
   clusterIP: None
   selector:
@@ -25,12 +25,11 @@ spec:
       port: 80
       targetPort: 8080
 ---
-# ClusterIP Service ==> general Load Balancing
 apiVersion: v1
 kind: Service
 metadata:
   name: ws-app-srv
-  namespace: ws-app-ns
+  namespace: ws-ns
 spec:
   selector:
     app: ws-app
@@ -39,12 +38,107 @@ spec:
       port: 80
       targetPort: 8080
 ---
-# 4. Deployment
+# ClusterIP Service for main-api ==> serves static content and placement API
+apiVersion: v1
+kind: Service
+metadata:
+  name: http-api-srv
+  namespace: ws-ns
+spec:
+  selector:
+    app: http-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+# ServiceAccount for ws-app pod-level Istio resource management
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ws-app-sa
+  namespace: ws-ns
+---
+# Role to create/delete Istio VirtualService and ServiceEntry resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ws-app-istio-manager
+  namespace: ws-ns
+rules:
+- apiGroups: ["networking.istio.io"]
+  resources: ["virtualservices", "serviceentries"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+# RoleBinding to grant the ServiceAccount the Istio management role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ws-app-istio-manager-binding
+  namespace: ws-ns
+subjects:
+- kind: ServiceAccount
+  name: ws-app-sa
+  namespace: ws-ns
+roleRef:
+  kind: Role
+  name: ws-app-istio-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+# Main API Deployment - serves static content and placement/routing API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-api-deployment
+  namespace: ws-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http-api
+  template:
+    metadata:
+      labels:
+        app: http-api
+    spec:
+      containers:
+      - name: http-api
+        image: localhost:32000/http-api-image:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: WS_HEADLESS_SERVICE
+          value: "ws-app-srv-headless.ws-ns.svc.cluster.local"
+        - name: WS_POD_PORT
+          value: "8080"
+        - name: CACHE_TTL_MS
+          value: "60000"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
+---
+# WebSocket App Deployment - handles WebSocket connections only
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ws-app-deployment
-  namespace: ws-app-ns
+  namespace: ws-ns
 spec:
   replicas: 3
   selector:
@@ -55,9 +149,10 @@ spec:
       labels:
         app: ws-app
     spec:
+      serviceAccountName: ws-app-sa
       containers:
       - name: engine
-        image: localhost:32000/ws-app-image:latest
+        image: localhost:32000/websocket-server-image:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -66,6 +161,18 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: INGRESS_DOMAIN
+          value: "ws-sharding-demo.local"
+        - name: ISTIO_INGRESS_GATEWAY
+          value: "main-gateway"
         startupProbe:
           httpGet:
             path: /info
@@ -73,7 +180,6 @@ spec:
           failureThreshold: 30
           periodSeconds: 10
           successThreshold: 1
-        
         livenessProbe:
           httpGet:
             path: /info
@@ -83,8 +189,6 @@ spec:
           timeoutSeconds: 2
           successThreshold: 1
           failureThreshold: 3
-
-       
         readinessProbe:
           httpGet:
             path: /info
@@ -94,14 +198,13 @@ spec:
           timeoutSeconds: 2
           successThreshold: 1
           failureThreshold: 3
-
 ---
 # Istio Gateway ==> The Entry Point, attached to the ingress gateways
 apiVersion: networking.istio.io/v1alpha3
 kind: Gateway
 metadata:
-  name: ws-app-gateway
-  namespace: ws-app-ns
+  name: main-gateway
+  namespace: ws-ns
 spec:
   selector:
     istio: ingress
@@ -112,22 +215,40 @@ spec:
       protocol: HTTP
     # virtual host http "Host" header, expect to map local dns record (e.g. /etc/hosts)
     hosts:
-    - "ws-app.local"
+    - "ws-sharding-demo.local"
 ---
-# Istio VirtualService (route http requests to ws-app pods, round-robin)
+# Istio VirtualService - main routing configuration
+# Routes /api/* and exact / to http-api, /websocket goes to pod-specific VirtualServices
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
 metadata:
-  name: ws-app-virtual-service
-  namespace: ws-app-ns
+  name: main-virtual-service
+  namespace: ws-ns
 spec:
   gateways:
-  - ws-app-gateway
+  - main-gateway
   hosts:
-  - "ws-app.local"
+  - "ws-sharding-demo.local"
   http:
-  - route:
+  # Exact match for root path
+  - name: root-route
+    match:
+    - uri:
+        exact: /
+    route:
     - destination:
-        host: ws-app-srv # Identify upstream pods via assocaited ClusterIP service
+        host: http-api-srv
         port:
           number: 80
+  # Prefix match for /api/*
+  - name: api-route
+    match:
+    - uri:
+        prefix: /api/
+    route:
+    - destination:
+        host: http-api-srv
+        port:
+          number: 80
+  # /websocket requests with routing-key will be handled by pod-specific VirtualServices
+  # created dynamically by ws-app pods on startup

@@ -1,10 +1,12 @@
 # build container image
 build:
-    docker build -t localhost:32000/ws-app-image:latest -f ops/Dockerfile .
+    podman build -t localhost:32000/websocket-server-image:latest -f websocket-server/Dockerfile ./websocket-server
+    podman build -t localhost:32000/http-api-image:latest -f http-api/Dockerfile ./http-api
 
 # push to microk8s registry (nodeport 32000)
 push:
-    podman push localhost:32000/ws-app-image:latest --tls-verify=false
+    podman push localhost:32000/websocket-server-image:latest --tls-verify=false
+    podman push localhost:32000/http-api-image:latest --tls-verify=false
 
 # Deploy to microk8s
 deploy:
@@ -58,14 +60,12 @@ map-microk8s-local-dns:
 
     echo "ClusterIP: $INGRESS_IP"
 
-    if grep -q "ws-app.local" /etc/hosts; then
+    if grep -q "ws-sharding-demo.local" /etc/hosts; then
         echo "updating Existing entry in /etc/hosts..."
-        sudo sed -i "s/.*ws-app.local/$INGRESS_IP ws-app.local/" /etc/hosts
+        sudo sed -i "s/.*ws-sharding-demo.local/$INGRESS_IP ws-app.local/" /etc/hosts
     else
         echo "Adding new entry to /etc/hosts..."
-        echo "$INGRESS_IP ws-app.local" | sudo tee -a /etc/hosts > /dev/null
+        echo "$INGRESS_IP ws-sharding-demo.local" | sudo tee -a /etc/hosts > /dev/null
     fi
-    echo "access at http://ws-app.local"
+    echo "access at http://ws-sharding-demo.local"
 
-
-all: build push deploy

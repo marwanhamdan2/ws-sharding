@@ -1,0 +1,23 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: pods-{{POD_ID}}-virtual-service
+  namespace: {{NAMESPACE}}
+spec:
+  gateways:
+    - {{ISTIO_INGRESS_GATEWAY}}
+  hosts:
+    - {{INGRESS_DOMAIN}}
+  http:
+    - name: route-pod-{{POD_ID}}
+      match:
+        - uri:
+            prefix: /websocket
+          queryParams:
+            routing-key:
+              exact: "{{POD_ID}}"
+      route:
+        - destination:
+            host: {{POD_ID}}.pod.cluster
+            port:
+              number: 8080
