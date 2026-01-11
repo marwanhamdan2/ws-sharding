@@ -1,0 +1,133 @@
+# namespace with Istio Auto-Injection
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ws-app-ns
+  annotations:
+    istio-injection: enabled
+  labels:
+    istio-injection: enabled
+---
+# Headless Service ==> For Peer Discovery
+# this creates DNS records for individual pods (e.g., pod-name.ws-app-headless.ws-app.svc.cluster.local
+# and we can use SRV record to list all the pods using DNS istead of calling k8s api server
+apiVersion: v1
+kind: Service
+metadata:
+  name: ws-app-srv-headless
+  namespace: ws-app-ns
+spec:
+  clusterIP: None
+  selector:
+    app: ws-app
+  ports:
+    - name: http-ws
+      port: 80
+      targetPort: 8080
+---
+# ClusterIP Service ==> general Load Balancing
+apiVersion: v1
+kind: Service
+metadata:
+  name: ws-app-srv
+  namespace: ws-app-ns
+spec:
+  selector:
+    app: ws-app
+  ports:
+    - name: http-ws
+      port: 80
+      targetPort: 8080
+---
+# 4. Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ws-app-deployment
+  namespace: ws-app-ns
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ws-app
+  template:
+    metadata:
+      labels:
+        app: ws-app
+    spec:
+      containers:
+      - name: engine
+        image: localhost:32000/ws-app-image:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        startupProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          failureThreshold: 30
+          periodSeconds: 10
+          successThreshold: 1
+        
+        livenessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          successThreshold: 1
+          failureThreshold: 3
+
+       
+        readinessProbe:
+          httpGet:
+            path: /info
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 2
+          successThreshold: 1
+          failureThreshold: 3
+
+---
+# Istio Gateway ==> The Entry Point, attached to the ingress gateways
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: ws-app-gateway
+  namespace: ws-app-ns
+spec:
+  selector:
+    istio: ingress
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    # virtual host http "Host" header, expect to map local dns record (e.g. /etc/hosts)
+    hosts:
+    - "ws-app.local"
+---
+# Istio VirtualService (route http requests to ws-app pods, round-robin)
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: ws-app-virtual-service
+  namespace: ws-app-ns
+spec:
+  gateways:
+  - ws-app-gateway
+  hosts:
+  - "ws-app.local"
+  http:
+  - route:
+    - destination:
+        host: ws-app-srv # Identify upstream pods via assocaited ClusterIP service
+        port:
+          number: 80
